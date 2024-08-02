@@ -55,7 +55,7 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> {
   late Box<NoteCard> _box;
   final TextEditingController _searchController = TextEditingController();
-  final Map<int, TextEditingController> _controllers = {};
+  final Map<String, TextEditingController> _controllers = {};
   Timer? _debounce;
   bool _isFabVisible = true;
 
@@ -98,11 +98,11 @@ class _MyHomePageState extends State<MyHomePage> {
     setState(() {});
   }
 
-  TextEditingController _getController(int index, String initialText) {
-    if (!_controllers.containsKey(index)) {
-      _controllers[index] = TextEditingController(text: initialText);
+  TextEditingController _getController(String key, String initialText) {
+    if (!_controllers.containsKey(key)) {
+      _controllers[key] = TextEditingController(text: initialText);
     }
-    return _controllers[index]!;
+    return _controllers[key]!;
   }
 
   void _onSearchChanged() {
@@ -166,76 +166,87 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
+  void _cleanupControllers(List<NoteCard> currentCards) {
+    _controllers.removeWhere((key, controller) {
+      if (!currentCards.any((card) => card.key.toString() == key)) {
+        controller.dispose();
+        return true;
+      }
+      return false;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('либера')
+          title: const Text('либера')
       ),
       body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: TextField(
-              controller: _searchController,
-              decoration: const InputDecoration(
-                labelText: 'поиск',
-                prefixIcon: Icon(Icons.search),
-              ),
-            ),
-          ),
-          Expanded(
-            child: ValueListenableBuilder<Box<NoteCard>>(
-              valueListenable: _box.listenable(),
-              builder: (context, box, child) {
-                final filteredNoteCards = _getFilteredNoteCards(_searchController.text);
-                return ListView.builder(
-                  itemCount: filteredNoteCards.length,
-                  itemBuilder: (context, index) {
-                    final card = filteredNoteCards[index];
-                    final textController = _getController(index, card.content);
+          children: [
+      Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: TextField(
+        controller: _searchController,
+        decoration: const InputDecoration(
+          labelText: 'поиск',
+          prefixIcon: Icon(Icons.search),
+        ),
+      ),
+    ),
+    Expanded(
+    child: ValueListenableBuilder<Box<NoteCard>>(
+    valueListenable: _box.listenable(),
+    builder: (context, box, child) {
+    final filteredNoteCards = _getFilteredNoteCards(_searchController.text);
+    _cleanupControllers(filteredNoteCards);
+    return ListView.builder(
+    itemCount: filteredNoteCards.length,
+    itemBuilder: (context, index) {
+    final card = filteredNoteCards[index];
+    final textController = _getController(card.key.toString(), card.content);
 
-                    return Card(
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(18.0),
-                      ),
-                      margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                      child: Padding(
-                        padding: const EdgeInsets.all(8.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Align(
-                              alignment: Alignment.topRight,
-                              child: IconButton(
-                                icon: const Icon(Icons.more_horiz),
-                                onPressed: () {
-                                  _showBottomSheet(context, card);
-                                },
-                              ),
-                            ),
-                            TextField(
-                              controller: textController,
-                              maxLines: 5,
-                              onChanged: (value) {
-                                card.content = value;
-                                card.save();
-                              },
-                              decoration: const InputDecoration(
-                                hintText: 'новая заметка',
-                                border: InputBorder.none,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-        ],
+    return Card(
+    shape: RoundedRectangleBorder(
+    borderRadius: BorderRadius.circular(18.0),
+    ),
+    margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+    child: Padding(
+    padding: const EdgeInsets.all(8.0),
+    child: Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+    Align(
+    alignment: Alignment.topRight,
+    child: IconButton(
+    icon: const Icon(Icons.more_horiz),
+    onPressed: () {
+    _showBottomSheet(context, card);
+    },
+    ),
+    ),
+      TextField(
+        controller: textController,
+        maxLines: 5,
+        onChanged: (value) {
+          card.content = value;
+          card.save();
+        },
+        decoration: const InputDecoration(
+          hintText: 'новая заметка',
+          border: InputBorder.none,
+        ),
+      ),
+    ],
+    ),
+    ),
+    );
+    },
+    );
+    },
+    ),
+    ),
+          ],
       ),
       floatingActionButton: MouseRegion(
         onEnter: (_) => _toggleFabVisibility(true),
