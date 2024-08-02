@@ -216,7 +216,7 @@ class _MyHomePageState extends State<MyHomePage> {
                             ),
                             TextField(
                               controller: textController,
-                              maxLines: 6,
+                              maxLines: 5,
                               onChanged: (value) {
                                 card.content = value;
                                 card.save();
