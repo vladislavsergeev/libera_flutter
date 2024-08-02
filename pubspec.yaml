@@ -1,21 +1,18 @@
 name: libera
-description: note-taking app libera
-
+description: "note-taking app libera"
+publish_to: 'none'
 version: 1.0.0+1
-
 environment:
-  sdk: '>=3.1.0-163.1.beta <4.0.0'
-
+  sdk: '>=3.4.4 <4.0.0'
 dependencies:
   flutter:
     sdk: flutter
   hive_flutter:
   path_provider:
-
+  flutter_secure_storage:
+  cupertino_icons: ^1.0.6
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints:
-
-flutter:
+  flutter_lints: ^3.0.0
   uses-material-design: true

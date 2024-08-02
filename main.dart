@@ -1,171 +1,232 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:path_provider/path_provider.dart' as path_provider;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'dart:async';
+import 'dart:convert';
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final appDocumentDirectory =
-      await path_provider.getApplicationDocumentsDirectory();
+  final appDocumentDirectory = await path_provider.getApplicationDocumentsDirectory();
   await Hive.initFlutter(appDocumentDirectory.path);
   Hive.registerAdapter(NoteCardAdapter());
-  await Hive.openBox<NoteCard>('libera');
-  runApp(MyApp());
+
+  const secureStorage = FlutterSecureStorage();
+  var encryptionKeyString = await secureStorage.read(key: 'encryptionKey');
+  List<int> encryptionKey;
+
+  if (encryptionKeyString == null) {
+    encryptionKey = Hive.generateSecureKey();
+    await secureStorage.write(key: 'encryptionKey', value: base64UrlEncode(encryptionKey));
+  } else {
+    encryptionKey = base64Url.decode(encryptionKeyString);
+  }
+
+  await Hive.openBox<NoteCard>(
+    'libera',
+    encryptionCipher: HiveAesCipher(encryptionKey),
+  );
+
+  runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'libera',
-      theme: ThemeData(
-        primarySwatch: MaterialColor(0xFF92a8a3, {
-          50: Color(0xFFe2eeed),
-          100: Color(0xFFc6ddd9),
-          200: Color(0xFFa7cac4),
-          300: Color(0xFF89b8af),
-          400: Color(0xFF6da7a0),
-          500: Color(0xFF92a8a3),
-          600: Color(0xFF57948b),
-          700: Color(0xFF46847a),
-          800: Color(0xFF366369),
-          900: Color(0xFF254357),
-        }),
-      ),
-      home: MyHomePage(),
+      theme: ThemeData.light(),
+      darkTheme: ThemeData.dark(),
+      themeMode: ThemeMode.system,
+      home: const MyHomePage(),
     );
   }
 }
 
 class MyHomePage extends StatefulWidget {
+  const MyHomePage({super.key});
+
   @override
-  _MyHomePageState createState() => _MyHomePageState();
+  State<MyHomePage> createState() => _MyHomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
-  ScrollController _scrollController = ScrollController();
-  final Box<NoteCard> box = Hive.box<NoteCard>('libera');
-  final List<TextEditingController> textControllers = [];
-  String searchText = '';
+class _MyHomePageState extends State<MyHomePage> {
+  late Box<NoteCard> _box;
+  final TextEditingController _searchController = TextEditingController();
+  final Map<int, TextEditingController> _controllers = {};
+  Timer? _debounce;
+  bool _isFabVisible = true;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
+    _box = Hive.box<NoteCard>('libera');
+    _searchController.addListener(_onSearchChanged);
   }
 
   @override
   void dispose() {
-    Hive.close();
-    WidgetsBinding.instance.removeObserver(this);
+    _searchController.removeListener(_onSearchChanged);
+    _searchController.dispose();
+    _debounce?.cancel();
+    for (var controller in _controllers.values) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
-  List<NoteCard> getFilteredNoteCards() {
+  List<NoteCard> _getFilteredNoteCards(String searchText) {
     if (searchText.isEmpty) {
-      return box.values.toList();
+      return _box.values.toList();
     } else {
-      return box.values.where((card) {
+      return _box.values.where((card) {
         return card.content.toLowerCase().contains(searchText.toLowerCase());
       }).toList();
     }
   }
 
-  List<TextEditingController> getFilteredTextControllers() {
-    final filteredNoteCards = getFilteredNoteCards();
-
-    if (filteredNoteCards.isEmpty) {
-      textControllers.clear();
-    } else if (filteredNoteCards.length != textControllers.length) {
-      textControllers.clear();
-      textControllers.addAll(List.generate(
-          filteredNoteCards.length, (index) => TextEditingController()));
-    }
-
-    return textControllers;
+  Future<void> _deleteCard(NoteCard card) async {
+    await card.delete();
+    setState(() {});
   }
 
-  void deleteCard(int index, BuildContext context) {
-    final noteCard = getFilteredNoteCards()[index];
+  Future<void> _addNewCard() async {
+    final newCard = NoteCard('');
+    await _box.add(newCard);
+    setState(() {});
+  }
 
-    setState(() {
-      textControllers.removeAt(index);
-      box.delete(noteCard.key);
+  TextEditingController _getController(int index, String initialText) {
+    if (!_controllers.containsKey(index)) {
+      _controllers[index] = TextEditingController(text: initialText);
+    }
+    return _controllers[index]!;
+  }
+
+  void _onSearchChanged() {
+    if (_debounce?.isActive ?? false) _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      setState(() {});
     });
+  }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Note card deleted.'),
-        behavior: SnackBarBehavior.floating,
+  void _showDeleteConfirmation(BuildContext context, NoteCard card) async {
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('удаление'),
+        content: const Text('точно удаляем заметку?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('отменить'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('удалить'),
+          ),
+        ],
       ),
     );
+
+    if (shouldDelete == true) {
+      await _deleteCard(card);
+    }
+  }
+
+  void _showBottomSheet(BuildContext context, NoteCard card) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.all(18.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.delete),
+                title: const Text('удалить'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showDeleteConfirmation(context, card);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _toggleFabVisibility(bool visible) {
+    setState(() {
+      _isFabVisible = visible;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final filteredNoteCards = getFilteredNoteCards();
-    final filteredTextControllers = getFilteredTextControllers();
-
     return Scaffold(
       appBar: AppBar(
-        title: Text('Либера'),
+        title: const Text('либера')
       ),
       body: Column(
         children: [
           Padding(
             padding: const EdgeInsets.all(8.0),
             child: TextField(
-              onChanged: (value) {
-                setState(() {
-                  searchText = value;
-                });
-              },
-              decoration: InputDecoration(
-                labelText: 'Поиск',
+              controller: _searchController,
+              decoration: const InputDecoration(
+                labelText: 'поиск',
                 prefixIcon: Icon(Icons.search),
               ),
             ),
           ),
           Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              itemCount: filteredNoteCards.length,
-              itemBuilder: (context, index) {
-                final card = filteredNoteCards[index];
-                final textController = filteredTextControllers[index];
-                textController.text = card.content;
+            child: ValueListenableBuilder<Box<NoteCard>>(
+              valueListenable: _box.listenable(),
+              builder: (context, box, child) {
+                final filteredNoteCards = _getFilteredNoteCards(_searchController.text);
+                return ListView.builder(
+                  itemCount: filteredNoteCards.length,
+                  itemBuilder: (context, index) {
+                    final card = filteredNoteCards[index];
+                    final textController = _getController(index, card.content);
 
-                return Builder(
-                  builder: (BuildContext context) {
-                    return Dismissible(
-                      key: UniqueKey(),
-                      direction: DismissDirection.startToEnd,
-                      background: Container(
-                        alignment: AlignmentDirectional.centerStart,
-                        color: Colors.red,
-                        child: Padding(
-                          padding: EdgeInsets.fromLTRB(0.0, 0.0, 10.0, 0.0),
-                          child: Icon(
-                            Icons.delete,
-                            color: Colors.white,
-                          ),
-                        ),
+                    return Card(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(18.0),
                       ),
-                      onDismissed: (direction) {
-                        deleteCard(index, context);
-                      },
-                      child: Container(
-                        margin: EdgeInsets.symmetric(vertical: 10),
-                        child: ListTile(
-                          title: Container(
-                            color: Color(0xFFfae4cd),
-                            child: TextField(
-                              controller: textController,
-                              maxLines: 7,
-                              onChanged: (value) {
-                                box.put(card.key.toString(), NoteCard(value));
-                              },
+                      margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+                      child: Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Align(
+                              alignment: Alignment.topRight,
+                              child: IconButton(
+                                icon: const Icon(Icons.more_horiz),
+                                onPressed: () {
+                                  _showBottomSheet(context, card);
+                                },
+                              ),
                             ),
-                          ),
+                            TextField(
+                              controller: textController,
+                              maxLines: 6,
+                              onChanged: (value) {
+                                card.content = value;
+                                card.save();
+                              },
+                              decoration: const InputDecoration(
+                                hintText: 'новая заметка',
+                                border: InputBorder.none,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     );
@@ -176,26 +237,18 @@ class _MyHomePageState extends State<MyHomePage> with WidgetsBindingObserver {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          final newCard = NoteCard('Новая заметка');
-          final newCardKey = await box.add(newCard);
-
-          setState(() {
-            textControllers.add(TextEditingController());
-          });
-          // Remove existing text controllers from the list
-          textControllers.removeWhere((controller) =>
-              controller.text.isEmpty || controller.text == 'Новая заметка');
-
-          // Scroll to the new note card
-          _scrollController.animateTo(
-            _scrollController.position.maxScrollExtent,
-            duration: Duration(milliseconds: 300),
-            curve: Curves.easeInOut,
-          );
-        },
-        child: Icon(Icons.add),
+      floatingActionButton: MouseRegion(
+        onEnter: (_) => _toggleFabVisibility(true),
+        onExit: (_) => _toggleFabVisibility(false),
+        child: AnimatedOpacity(
+          opacity: _isFabVisible ? 1.0 : 0.3,
+          duration: const Duration(milliseconds: 300),
+          child: FloatingActionButton(
+            shape: const CircleBorder(),
+            onPressed: _addNewCard,
+            child: const Icon(Icons.add),
+          ),
+        ),
       ),
     );
   }
@@ -211,7 +264,7 @@ class NoteCard extends HiveObject {
 
 class NoteCardAdapter extends TypeAdapter<NoteCard> {
   @override
-  final typeId = 0;
+  final int typeId = 0;
 
   @override
   NoteCard read(BinaryReader reader) {
